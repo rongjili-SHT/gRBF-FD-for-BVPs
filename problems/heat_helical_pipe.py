@@ -7,7 +7,7 @@ jax.config.update("jax_enable_x64", True)
 
 def generate_helical_pipe(N):
     a = 8.0
-    b = 1.0
+    b = 2.0
     denom = jnp.sqrt(a**2 + b**2)
     alpha = a / denom
     beta = b / denom
@@ -15,8 +15,8 @@ def generate_helical_pipe(N):
     num_turns = 1.5
     omega_max = num_turns * 2 * jnp.pi
 
-    R_start_scale = 3.5
-    R_end_scale = 3.5
+    R_start_scale = 3.0
+    R_end_scale = 3.0
 
     def x_map(param):
         theta, omega = param[0], param[1]
@@ -276,4 +276,4 @@ def heat_helical_pipe(N=6400, l=4, K=35, l_grad=4, K_grad=35, lap_opt='qp', dn_o
         return ie_l2
 
 if __name__ == "__main__":
-    ie_l2 = heat_helical_pipe(N=51200, l=4, K=25, l_grad=4, K_grad=30, seed=0)
+    ie_l2 = heat_helical_pipe(N=51200, l=4, K=30, l_grad=4, K_grad=30, seed=0)

@@ -78,49 +78,7 @@ def get_operator_weights(
         dP = (n_vec @ tangent_basis.T @ dP).reshape(1, -1) # shape: (1, m)
         b_eq = dP[0, :]
 
-    if opt == 'lp':
-        # typically use this for laplacian
-
-        # target
-        c_lp = np.zeros(K + 1)
-        c_lp[0], c_lp[-1] = 1.0 / K, K
-
-        # equality
-        A_eq = np.zeros((m, K + 1))
-        A_eq[:, :K] = P.T
-
-        # inequaliy 
-        num_ineq = K + 3
-        A = np.zeros((num_ineq, K + 1))
-        b = np.zeros(num_ineq)
-
-        # 1. w1 <= 0 AND -w1 <= w1_min
-        A[0, 0] = 1.0 
-
-        A[1, 0] = -1.0
-        b[1] = -w1_min
-
-        # 2. -w_2:K - C <= 0
-        w_idx = np.arange(1, K) # [1, 2, ..., K-1]
-        row_idx = np.arange(2, K + 1)
-
-        A[row_idx, w_idx] = -1.0  # -w_2...K
-        A[row_idx, -1] = -1.0     # -C
-
-        # 3. -C <= 0  AND  C <= 1e5
-        A[K + 1, -1] = -1.0
-
-        A[K + 2, -1] = 1.0
-        b[K + 2] = 1e5
-
-        res = linprog(c_lp, A_ub=A, b_ub=b, A_eq=A_eq, b_eq=b_eq, bounds=(None, None), method='highs')
-        if not res.success:
-            return None
-        weights = res.x[:K]
-
-        return weights.flatten() / scale_factor
-
-    elif opt == 'qp':
+    if opt == 'qp':
         H_diag = np.ones(K + 1)
         H_diag[0] = 1.0 / (K**2)
         H_diag[-1] = K**2 
@@ -174,7 +132,17 @@ def get_operator_weights(
             A[2 * K - 1, -1] = -1.0
 
             A[2 * K, -1] = 1.0
-            b[2 * K] = 1e5   
+            b[2 * K] = 1e5
+
+        P_t_P = P.T @ P 
+        if np.linalg.cond(P_t_P) > 1e14:
+            U, S, Vh = np.linalg.svd(A_eq, full_matrices=False)
+            
+            tol = 1e-12 * S[0] 
+            rank = np.sum(S > tol)
+            
+            A_eq = U.T[:rank, :] @ A_eq
+            b_eq = U.T[:rank, :] @ b_eq
                 
         sol = solvers.qp(matrix(H), matrix(f), matrix(A), matrix(b), matrix(A_eq), matrix(b_eq))
         if sol['status'] != 'optimal':
@@ -182,7 +150,7 @@ def get_operator_weights(
 
         weights = np.array(sol['x'])[:K, :].T
         return weights.flatten()  / scale_factor
-    
+
     r = np.linalg.norm(norm_coords, axis=1) # shape: (K,)
 
     if operator == 'lap':
@@ -212,55 +180,74 @@ def get_stable_weights(stencil_fetcher, weight_kwargs, K_init, expected_sign, op
     K_current = K_init
     max_retries_auto_K = 15
 
+    # best of history
+    best_ratio = -1.0
+    best_weights = None
+    best_stencil_ids = None
+
     # auto K
 
     for _ in range(max_retries_auto_K + 1):
         stencil_points, stencil_ids = stencil_fetcher(K_current)
         weights = get_operator_weights(stencil=stencil_points, **weight_kwargs)
         
+        if K_current == K_init:
+            initial_weights = weights
+            initial_stencil_ids = stencil_ids
+
         w_center, w_neighbors = weights[0], weights[1:]
         
         is_correct_sign = (w_center * expected_sign) > 0.0
         ratio = np.abs(w_center) / np.max(np.abs(w_neighbors))
         is_stable = ratio >= gamma
 
-        if is_correct_sign and is_stable:
-            return weights, stencil_ids
+        if is_correct_sign:
+            if is_stable:
+                return weights, stencil_ids
+            elif ratio > best_ratio:
+                best_ratio = ratio
+                best_weights = weights
+                best_stencil_ids = stencil_ids
 
         K_current += 2
 
-    # opt
-    K_current = K_init + 5
-    opt_kwargs = weight_kwargs.copy()
-    opt_kwargs['opt'] = opt
-
-    # best of history
-    best_ratio = -1.0
-    best_weights = None
-    best_stencil_ids = None
-    
-    for _ in range(max_retries_opt + 1):
-        stencil_points, stencil_ids = stencil_fetcher(K_current)
-        weights = get_operator_weights(stencil=stencil_points, **opt_kwargs)
-
-        if weights is not None:
-            w_center, w_neighbors = weights[0], weights[1:]
-            ratio = np.abs(w_center) / np.max(np.abs(w_neighbors))
-            
-            is_correct_sign = (w_center * expected_sign) > 0.0
-            is_stable = ratio >= gamma
-
-            if is_correct_sign:
-                if is_stable:
-                    return weights, stencil_ids
-                elif ratio > best_ratio:
-                    best_ratio = ratio
-                    best_weights = weights
-                    best_stencil_ids = stencil_ids
-        
-        K_current += 2
-
-    if best_weights is not None:
-        return best_weights, best_stencil_ids
+    if opt is None:
+        if best_weights is not None:
+            return best_weights, best_stencil_ids
+        else:
+            return initial_weights, initial_stencil_ids 
     else:
-        raise RuntimeError(f"Operator {weight_kwargs.get('operator')} not optimal.")
+        K_current = K_init
+        opt_kwargs = weight_kwargs.copy()
+        opt_kwargs['opt'] = opt
+
+        # best of history
+        best_ratio = -1.0
+        best_weights = None
+        best_stencil_ids = None
+        
+        for _ in range(max_retries_opt + 1):
+            stencil_points, stencil_ids = stencil_fetcher(K_current)
+            weights = get_operator_weights(stencil=stencil_points, **opt_kwargs)
+
+            if weights is not None:
+                w_center, w_neighbors = weights[0], weights[1:]
+                ratio = np.abs(w_center) / np.max(np.abs(w_neighbors))
+                
+                is_correct_sign = (w_center * expected_sign) > 0.0
+                is_stable = ratio >= gamma
+
+                if is_correct_sign:
+                    if is_stable:
+                        return weights, stencil_ids
+                    elif ratio > best_ratio:
+                        best_ratio = ratio
+                        best_weights = weights
+                        best_stencil_ids = stencil_ids
+            
+            K_current += 2
+
+        if best_weights is not None:
+            return best_weights, best_stencil_ids
+        else:
+            raise RuntimeError(f"Operator {weight_kwargs.get('operator')} not optimal.")

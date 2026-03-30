@@ -130,10 +130,10 @@ def solve_poisson_robin_schur(L, D_n, f, g, id_interior, id_boundary, N, require
     u_num[id_boundary] = u_num_boundary
 
     if require_st:
-        return u_num, np.linalg.norm(np.linalg.inv(A_prime.toarray()), ord=np.inf)
+        return u_num, np.linalg.norm(np.linalg.inv(A_prime.toarray()), ord=2)
     return u_num
 
-def robin_semi_torus(N=6400, l=4, K=25, l_grad=3, K_grad=25, lap_opt='qp', dn_opt='qp', seed=None):
+def robin_semi_torus(N=6400, l=4, K=25, l_grad=3, K_grad=25, lap_opt='qp', dn_opt='qp', seed=None, vis=False):
     #-- PARAMETERS --#
     kappa = 3
     delta = 1e-5
@@ -219,6 +219,8 @@ def robin_semi_torus(N=6400, l=4, K=25, l_grad=3, K_grad=25, lap_opt='qp', dn_op
     ie_l2 = np.sqrt(np.sum(ie ** 2) / N)
     # ie_max = np.max(ie)
 
+    if vis:
+        return fe_interior, fe_boundary, ie, manifold.params, id_interior, id_boundary
     return fe_interior_l2, fe_boundary_l2, ie_l2
 
 if __name__ == "__main__":
